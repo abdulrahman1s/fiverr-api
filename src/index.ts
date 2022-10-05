@@ -1,12 +1,24 @@
 import * as cheerio from 'https://esm.sh/cheerio@1.0.0-rc.12';
 import { Application, Router } from 'https://deno.land/x/oak@v11.1.0/mod.ts';
 
-const FIVERR_ENDPOINT = 'https://wwww.fiverr.com';
+const FIVERR_ENDPOINT = 'https://www.fiverr.com';
 
 const app = new Router();
 const headers: Record<string, string> = {
   'User-Agent':
     'Mozilla/5.0 (X11; Linux x86_64; rv:90.0) Gecko/20100101 Firefox/101.0',
+};
+
+const reviews_headers: Record<string, string> = {
+  'User-Agent':
+    'Mozilla/5.0 (X11; Linux x86_64; rv:90.0) Gecko/20100101 Firefox/90.0',
+  'Sec-Fetch-Dest': 'empty',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Site': 'same-origin',
+  'X-Requested-With': 'XMLHttpRequest',
+  'Accept': 'application/json',
+  'Upgrade-Insecure-Requests': '1',
+  'TE': 'trailers',
 };
 
 let csrf: string | null = null;
@@ -32,11 +44,23 @@ const fetchUserData = async (username: string) => {
   return JSON.parse(data.text());
 };
 
+const stringifyParams = (params: Record<string, unknown>) => {
+  return Object.entries(params).map(([key, value]) =>
+    `${key}=${encodeURIComponent(value as string)}`
+  ).join(
+    '&',
+  );
+};
+
 app.get('/:username', async (ctx) => {
   const info = await fetchUserData(ctx.params.username);
+
+  reviews_headers['X-CSRF-Token'] = csrf!;
+  reviews_headers['Referer'] = `${FIVERR_ENDPOINT}/${ctx.params.username}`;
+
   const user_id = info.userData.user.id;
   const reviews = [...info.userData.buying_reviews.reviews];
-  const payload: Record<string, unknown> = {
+  const params: Record<string, unknown> = {
     user_id,
   };
 
@@ -44,23 +68,25 @@ app.get('/:username', async (ctx) => {
 
   while (hasNext) {
     const res = await fetch(
-      `${FIVERR_ENDPOINT}/reviews/user_page/fetch_user_reviews/${user_id}`,
+      `${FIVERR_ENDPOINT}/reviews/user_page/fetch_user_reviews/${user_id}?${
+        stringifyParams(params)
+      }`,
       {
-        headers,
-        body: JSON.stringify(payload),
+        headers: reviews_headers,
       },
     );
 
     if (!res.ok) {
-      console.warn(res);
+      console.warn('BAD REQUEST', res);
+      console.log(await res.text());
       break;
     }
 
     const data = await res.json();
 
     reviews.push(...data.reviews);
-    payload.last_star_rating_id = reviews.at(-1).id;
-    payload.last_review_id = reviews.at(-1).id;
+    params.last_star_rating_id = reviews.at(-1).id;
+    params.last_review_id = reviews.at(-1).id;
     hasNext = data.has_next;
   }
 
